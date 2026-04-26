@@ -1,17 +1,15 @@
 import time
 import threading
-
 import av
-import cv2
 import mediapipe as mp
 import numpy as np
 import streamlit as st
+from PIL import Image, ImageDraw
 from scipy.spatial import distance
 from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-
 
 LEFT_EYE = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE = [362, 385, 387, 263, 373, 380]
@@ -37,21 +35,22 @@ class DrowsinessProcessor(VideoProcessorBase):
         )
         self.detector = vision.FaceLandmarker.create_from_options(options)
         self.closed_start_time = None
-        self.alarm_on = False
         self.lock = threading.Lock()
         self.status = "Normal"
         self.ear = 0.0
 
     def recv(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        img = cv2.flip(img, 1)
+        img = frame.to_ndarray(format="rgb24")
+        img = np.fliplr(img).copy()
 
         h, w, _ = img.shape
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img)
 
         timestamp_ms = int(time.time() * 1000)
         result = self.detector.detect_for_video(mp_image, timestamp_ms)
+
+        pil_img = Image.fromarray(img)
+        draw = ImageDraw.Draw(pil_img)
 
         status = "No face detected"
         ear = 0.0
@@ -66,15 +65,17 @@ class DrowsinessProcessor(VideoProcessorBase):
                 x = int(landmarks[idx].x * w)
                 y = int(landmarks[idx].y * h)
                 left_eye.append((x, y))
-                cv2.circle(img, (x, y), 2, (0, 255, 0), -1)
+                draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=(0, 255, 0))
 
             for idx in RIGHT_EYE:
                 x = int(landmarks[idx].x * w)
                 y = int(landmarks[idx].y * h)
                 right_eye.append((x, y))
-                cv2.circle(img, (x, y), 2, (0, 255, 0), -1)
+                draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=(0, 255, 0))
 
             ear = (eye_aspect_ratio(left_eye) + eye_aspect_ratio(right_eye)) / 2
+
+            draw.text((30, 30), f"EAR: {ear:.2f}", fill=(255, 255, 255))
 
             if ear < EAR_THRESHOLD:
                 if self.closed_start_time is None:
@@ -82,47 +83,22 @@ class DrowsinessProcessor(VideoProcessorBase):
 
                 if time.time() - self.closed_start_time >= DROWSY_TIME:
                     status = "DROWSINESS ALERT!"
-                    cv2.putText(
-                        img,
-                        "DROWSINESS ALERT!",
-                        (30, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1.1,
-                        (0, 0, 255),
-                        3,
-                    )
+                    draw.text((30, 70), "DROWSINESS ALERT!", fill=(255, 0, 0))
                 else:
                     status = "Eyes closed"
             else:
                 self.closed_start_time = None
                 status = "Normal"
-
-            cv2.putText(
-                img,
-                f"EAR: {ear:.2f}",
-                (30, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (255, 255, 255),
-                2,
-            )
         else:
             self.closed_start_time = None
-            cv2.putText(
-                img,
-                "No face detected",
-                (30, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 0, 255),
-                2,
-            )
+            draw.text((30, 30), "No face detected", fill=(255, 0, 0))
 
         with self.lock:
             self.status = status
             self.ear = ear
 
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        output = np.array(pil_img)
+        return av.VideoFrame.from_ndarray(output, format="rgb24")
 
 
 st.set_page_config(page_title="Drowsiness Detection", page_icon="😴")
