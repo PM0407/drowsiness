@@ -1,7 +1,7 @@
 streamlit
 streamlit-webrtc
 mediapipe==0.10.33
-opencv-python-headless
 scipy
 numpy
 av
+pillow
